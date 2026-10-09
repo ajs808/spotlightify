@@ -6,15 +6,15 @@
     <description>Spotlightify release feed</description>
     <language>en</language>
     <item>
-      <title>v0.6.0</title>
-      <pubDate>Mon, 28 Sep 2026 14:42:29 +0000</pubDate>
-      <sparkle:version>70</sparkle:version>
-      <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+      <title>v0.7.0</title>
+      <pubDate>Fri, 09 Oct 2026 03:39:01 +0000</pubDate>
+      <sparkle:version>71</sparkle:version>
+      <sparkle:shortVersionString>0.7.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
-        url="https://github.com/anudeep-gad12/spotlightify/releases/download/v0.6.0/Spotlightify.app.zip"
-        sparkle:edSignature="xWbtY7vakYjFAXz01b6q0WHb6+Db3ahchCPUnkHxFV8sFs/TdFefOn3kT2g8zRg0/K9di9omcUA5g2YgS6/gBQ=="
-        length="1823753"
+        url="https://github.com/anudeep-gad12/spotlightify/releases/download/v0.7.0/Spotlightify.app.zip"
+        sparkle:edSignature="9FW9kCipv82iXLwEKwlrertD3sDShkytyPTuCzr1EVlQp+cehoGslGm+fT6hQw3weUFbbTMrEe9WR/HFOEhiCg=="
+        length="1947732"
         type="application/octet-stream" />
     </item>
   </channel>

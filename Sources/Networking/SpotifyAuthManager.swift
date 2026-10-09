@@ -43,8 +43,10 @@ private struct TokenResponse: Decodable {
     let tokenType: String
     let expiresIn: Int
     let refreshToken: String?
+    let scope: String?
 
     enum CodingKeys: String, CodingKey {
+        case scope
         case accessToken = "access_token"
         case tokenType = "token_type"
         case expiresIn = "expires_in"
@@ -54,6 +56,14 @@ private struct TokenResponse: Decodable {
 
 final class SpotifyAuthManager: NSObject, @unchecked Sendable {
     static let redirectURIDescription = "http://127.0.0.1:43821/callback"
+    static let libraryModifyScope = "user-library-modify"
+    static let requestedScopes = [
+        "user-read-playback-state",
+        "user-modify-playback-state",
+        "user-read-recently-played",
+        "user-library-read",
+        libraryModifyScope
+    ]
 
     private let configuration: AppConfiguration
     private let keychain: KeychainStore
@@ -99,7 +109,7 @@ final class SpotifyAuthManager: NSObject, @unchecked Sendable {
                 if !forceReauthentication, let token = try self.keychain.loadToken(), !token.refreshToken.isEmpty {
                     do {
                         AppLogger.shared.log("refreshing access token", category: "auth")
-                        let refreshed = try await self.refreshToken(token.refreshToken)
+                        let refreshed = try await self.refreshToken(token.refreshToken, previousScope: token.scope)
                         try self.keychain.save(token: refreshed)
                         AppLogger.shared.log("token refresh succeeded", category: "auth")
                         return refreshed
@@ -212,7 +222,7 @@ final class SpotifyAuthManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: configuration.redirectURI),
-            URLQueryItem(name: "scope", value: "user-read-playback-state user-modify-playback-state user-read-recently-played"),
+            URLQueryItem(name: "scope", value: Self.requestedScopes.joined(separator: " ")),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "code_challenge", value: pkce.codeChallenge),
             URLQueryItem(name: "state", value: state)
@@ -248,11 +258,12 @@ final class SpotifyAuthManager: NSObject, @unchecked Sendable {
         return SpotifyToken(
             accessToken: response.accessToken,
             refreshToken: response.refreshToken ?? "",
-            expiryDate: Date().addingTimeInterval(TimeInterval(response.expiresIn))
+            expiryDate: Date().addingTimeInterval(TimeInterval(response.expiresIn)),
+            scope: response.scope
         )
     }
 
-    private func refreshToken(_ refreshToken: String) async throws -> SpotifyToken {
+    private func refreshToken(_ refreshToken: String, previousScope: String?) async throws -> SpotifyToken {
         let clientID = clientIDProvider()
         guard !clientID.isEmpty, clientID != "CHANGE_ME" else {
             throw SpotifyAuthError.missingClientID
@@ -268,7 +279,8 @@ final class SpotifyAuthManager: NSObject, @unchecked Sendable {
         return SpotifyToken(
             accessToken: response.accessToken,
             refreshToken: response.refreshToken ?? refreshToken,
-            expiryDate: Date().addingTimeInterval(TimeInterval(response.expiresIn))
+            expiryDate: Date().addingTimeInterval(TimeInterval(response.expiresIn)),
+            scope: response.scope ?? previousScope
         )
     }
 

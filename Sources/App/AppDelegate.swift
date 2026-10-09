@@ -19,6 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.setActivationPolicy(.accessory)
+
+        // Unit tests run inside the app; skip startup so they never touch the real
+        // keychain login, Spotify, global hotkeys or the menu bar.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+            return
+        }
         AppLogger.shared.log("applicationDidFinishLaunching", category: "app")
 
         environment = AppEnvironment()
@@ -39,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environment.bind(panelController: panelController, statusBarController: statusBarController)
         environment.updaterController = updaterController
         statusBarController.install()
+        environment.start()
         registerHotKeys()
         environment.configureLaunchAtLogin()
         AppLogger.shared.log("app launch completed", category: "app")
@@ -46,7 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         AppLogger.shared.log("applicationWillTerminate", category: "app")
-        hotKeyManager.unregisterAll()
+        hotKeyManager?.unregisterAll()
+        environment?.playerMonitor.stop()
     }
 
     private func registerHotKeys() {

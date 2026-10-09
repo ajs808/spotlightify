@@ -84,6 +84,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+        environment.searchViewModel.setPresented(true)
         environment.searchViewModel.requestSearchFocus()
         AppLogger.shared.log("show end", category: "panel")
     }
@@ -92,6 +93,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         AppLogger.shared.log("close begin", category: "panel")
         super.close()
         window?.orderOut(nil)
+        environment.searchViewModel.setPresented(false)
         restorePreviousApplicationIfNeeded()
         AppLogger.shared.log("close end", category: "panel")
     }
@@ -130,50 +132,43 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                 return nil
             }
 
+            let viewModel = self.environment.searchViewModel
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
             switch Int(event.keyCode) {
             case kVK_Escape:
                 self.environment.closePanel()
                 return nil
             case kVK_Tab:
-                guard self.environment.searchViewModel.canSwitchModes else { return event }
-                self.environment.searchViewModel.cycleMode(backwards: event.modifierFlags.contains(.shift))
+                guard viewModel.canSwitchModes else { return event }
+                viewModel.cycleMode(backwards: event.modifierFlags.contains(.shift))
                 return nil
-            case kVK_UpArrow:
-                if self.environment.searchViewModel.canHandleSelectionMovement {
-                    self.environment.searchViewModel.moveSelection(by: -1)
-                    return nil
-                }
-                return event
-            case kVK_DownArrow:
-                if self.environment.searchViewModel.canHandleSelectionMovement {
-                    self.environment.searchViewModel.moveSelection(by: 1)
-                    return nil
-                }
-                return event
+            case kVK_UpArrow, kVK_DownArrow:
+                guard viewModel.canHandleSelectionMovement else { return event }
+                viewModel.moveSelection(by: Int(event.keyCode) == kVK_UpArrow ? -1 : 1)
+                return nil
             case kVK_RightArrow:
-                guard event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
-                if self.environment.searchViewModel.canNavigateIntoAlbum {
-                    self.environment.searchViewModel.navigateIntoAlbum()
-                    return nil
-                }
-                return event
+                guard modifiers.isEmpty, viewModel.canMoveRight else { return event }
+                viewModel.moveRight()
+                return nil
             case kVK_LeftArrow:
-                guard event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
-                if self.environment.searchViewModel.canNavigateBackFromAlbum {
-                    self.environment.searchViewModel.navigateBackFromAlbum()
-                    return nil
-                }
-                return event
+                guard modifiers.isEmpty, viewModel.canMoveLeft else { return event }
+                viewModel.moveLeft()
+                return nil
             case kVK_Return:
-                if self.environment.searchViewModel.canMoveSelection {
-                    if event.modifierFlags.contains(.command) {
-                        self.environment.searchViewModel.queueSelected()
-                    } else {
-                        self.environment.searchViewModel.playSelected()
-                    }
-                    return nil
+                guard viewModel.hasSelection else { return event }
+                if modifiers.contains(.command) {
+                    viewModel.queueSelection()
+                } else if modifiers.contains(.shift) {
+                    viewModel.playSelectionContext()
+                } else {
+                    viewModel.activateSelection()
                 }
-                return event
+                return nil
+            case kVK_ANSI_L where modifiers == .command:
+                guard viewModel.canSwitchModes else { return event }
+                viewModel.toggleLikeForSelection()
+                return nil
             default:
                 return event
             }

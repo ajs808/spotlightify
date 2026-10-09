@@ -1,30 +1,111 @@
 import Foundation
 
-enum SearchFocusMode: Equatable {
-    case mainList
-    case albumDetail
+/// Which list keyboard navigation currently drives.
+enum SearchFocus: Equatable {
+    /// Songs in search mode, or the single list in Recent and Queue.
+    case main
+    /// Artists and albums beside the songs.
+    case browse
+    /// The album or artist page opened from the browse column.
+    case detail
 }
 
-enum SearchResultRow: Identifiable, Equatable {
-    case track(SpotifyTrack)
+struct SearchResults: Equatable {
+    static let maxArtists = 3
+
+    let tracks: [SpotifyTrack]
+    let albums: [SpotifyAlbumItem]
+    let artists: [SpotifyArtistItem]
+
+    init(tracks: [SpotifyTrack] = [], albums: [SpotifyAlbumItem] = [], artists: [SpotifyArtistItem] = []) {
+        self.tracks = tracks
+        self.albums = albums
+        self.artists = artists
+    }
+
+    var isEmpty: Bool {
+        tracks.isEmpty && albums.isEmpty && artists.isEmpty
+    }
+
+    /// Artists first, then albums: the order of the right-hand column.
+    var browseItems: [BrowseItem] {
+        artists.map(BrowseItem.artist) + albums.map(BrowseItem.album)
+    }
+}
+
+enum BrowseItem: Identifiable, Equatable {
+    case artist(SpotifyArtistItem)
     case album(SpotifyAlbumItem)
 
     var id: String {
         switch self {
-        case .track(let t): return t.id
-        case .album(let a): return a.id
+        case .artist(let artist): return "artist:\(artist.id)"
+        case .album(let album): return "album:\(album.id)"
         }
     }
 
-    var albumItem: SpotifyAlbumItem? {
-        if case .album(let album) = self { return album }
-        return nil
+    var uri: String {
+        switch self {
+        case .artist(let artist): return artist.uri
+        case .album(let album): return album.uri
+        }
     }
 
-    var track: SpotifyTrack? {
-        if case .track(let t) = self { return t }
-        return nil
+    var detailPage: DetailPage {
+        switch self {
+        case .artist(let artist): return .artist(artist)
+        case .album(let album): return .album(album)
+        }
     }
+}
+
+enum DetailPage: Equatable {
+    case album(SpotifyAlbumItem)
+    case artist(SpotifyArtistItem)
+
+    var id: String {
+        switch self {
+        case .album(let album): return "album:\(album.id)"
+        case .artist(let artist): return "artist:\(artist.id)"
+        }
+    }
+
+    var contextURI: String {
+        switch self {
+        case .album(let album): return album.uri
+        case .artist(let artist): return artist.uri
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .album(let album): return album.name
+        case .artist(let artist): return artist.name
+        }
+    }
+}
+
+enum DetailContent: Equatable {
+    case loading
+    case tracks([TrackListItem])
+    case albums([SpotifyAlbumItem])
+    case empty
+    case error(String)
+
+    var itemCount: Int {
+        switch self {
+        case .tracks(let items): return items.count
+        case .albums(let albums): return albums.count
+        case .loading, .empty, .error: return 0
+        }
+    }
+}
+
+/// One page in the right-hand drill-down (artist → album → tracks).
+struct DetailEntry: Equatable {
+    let page: DetailPage
+    var content: DetailContent = .loading
+    var selectedIndex = 0
 }
 
 enum SearchPanelState: Equatable {
@@ -32,7 +113,7 @@ enum SearchPanelState: Equatable {
     case helper
     case loading
     case authenticationRequired(String)
-    case results([SearchResultRow])
+    case results(SearchResults)
     case empty
     case error(String)
 }

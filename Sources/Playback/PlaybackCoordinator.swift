@@ -1,27 +1,52 @@
 import Foundation
 
 actor PlaybackCoordinator {
-    private let apiClient: SpotifyAPIClient
+    /// How long a resolved device ID is trusted before re-running device discovery.
+    private static let deviceCacheLifetime: TimeInterval = 30 * 60
+    /// `Host.current()` can block on name resolution, so read it once.
+    private static let localComputerName = Host.current().localizedName ?? ""
 
-    init(apiClient: SpotifyAPIClient) {
+    private let apiClient: SpotifyAPIClient
+    private let now: @Sendable () -> Date
+    private var cachedDevice: (device: AddressableSpotifyDevice, resolvedAt: Date)?
+
+    init(apiClient: SpotifyAPIClient, now: @escaping @Sendable () -> Date = Date.init) {
         self.apiClient = apiClient
+        self.now = now
     }
 
-    func play(track: SpotifyTrack) async throws {
+    func play(_ target: PlaybackTarget) async throws {
+        // Fast path: reuse the last device that worked and skip device discovery.
+        if let device = validCachedDevice {
+            do {
+                try await sendPlay(target, deviceID: device.id)
+                return
+            } catch let error as SpotifyAPIError where error == .noDevice || error == .restrictedDevice {
+                AppLogger.shared.log("cached device rejected; rediscovering error=\(error)", category: "playback")
+                cachedDevice = nil
+            }
+        }
+
         guard let device = try await findPlaybackDevice() else {
             AppLogger.shared.log("device discovery empty; trying Spotify active-device playback", category: "playback")
-            try await apiClient.play(trackURI: track.uri, deviceID: nil)
+            try await sendPlay(target, deviceID: nil)
             return
         }
         if !device.isActive {
             try await apiClient.transferPlayback(deviceID: device.id)
         }
-        try await apiClient.play(trackURI: track.uri, deviceID: device.id)
+        try await sendPlay(target, deviceID: device.id)
+        remember(device)
     }
 
-    func queue(track: SpotifyTrack) async throws {
-        let device = try await resolvePlaybackDevice()
-        try await apiClient.queue(trackURI: track.uri, deviceID: device.id)
+    func queue(trackURIs: [String]) async throws {
+        guard !trackURIs.isEmpty else { return }
+        try await withPlaybackDevice(transferIfInactive: false) { apiClient, device in
+            // Spotify's queue endpoint takes one URI per call; keep album order.
+            for uri in trackURIs {
+                try await apiClient.queue(trackURI: uri, deviceID: device.id)
+            }
+        }
     }
 
     func playPause() async throws {
@@ -32,19 +57,15 @@ actor PlaybackCoordinator {
             return
         }
 
-        let device = try await resolvePlaybackDevice()
-        if !device.isActive {
-            try await apiClient.transferPlayback(deviceID: device.id)
+        try await withPlaybackDevice { apiClient, device in
+            try await apiClient.resume(deviceID: device.id)
         }
-        try await apiClient.resume(deviceID: device.id)
     }
 
     func nextTrack() async throws {
-        let device = try await resolvePlaybackDevice()
-        if !device.isActive {
-            try await apiClient.transferPlayback(deviceID: device.id)
+        try await withPlaybackDevice { apiClient, device in
+            try await apiClient.skipNext(deviceID: device.id)
         }
-        try await apiClient.skipNext(deviceID: device.id)
     }
 
     func previousTrack() async throws {
@@ -60,29 +81,29 @@ actor PlaybackCoordinator {
             return
         }
 
-        let device = try await resolvePlaybackDevice()
-        if !device.isActive {
-            try await apiClient.transferPlayback(deviceID: device.id)
-        }
-        do {
-            try await apiClient.skipPrevious(deviceID: device.id)
-        } catch let error as SpotifyAPIError {
-            if case .message(let message) = error,
-               message.localizedCaseInsensitiveContains("restriction violated")
-            {
-                try await apiClient.seek(positionMS: 0, deviceID: device.id)
-                return
+        try await withPlaybackDevice { apiClient, device in
+            do {
+                try await apiClient.skipPrevious(deviceID: device.id)
+            } catch let error as SpotifyAPIError {
+                if case .message(let message) = error,
+                   message.localizedCaseInsensitiveContains("restriction violated")
+                {
+                    try await apiClient.seek(positionMS: 0, deviceID: device.id)
+                    return
+                }
+                throw error
             }
-            throw error
         }
     }
 
     func seek(to positionMS: Int) async throws {
-        let device = try await resolvePlaybackDevice()
-        if !device.isActive {
-            try await apiClient.transferPlayback(deviceID: device.id)
+        try await withPlaybackDevice { apiClient, device in
+            try await apiClient.seek(positionMS: max(0, positionMS), deviceID: device.id)
         }
-        try await apiClient.seek(positionMS: max(0, positionMS), deviceID: device.id)
+    }
+
+    func forgetCachedDevice() {
+        cachedDevice = nil
     }
 
     func resolvePlaybackDevice(
@@ -95,6 +116,55 @@ actor PlaybackCoordinator {
             throw SpotifyAPIError.noDevice
         }
         return try resolvedAddressableDevice(from: device)
+    }
+
+    // MARK: Private
+
+    private var validCachedDevice: AddressableSpotifyDevice? {
+        guard let cachedDevice, now().timeIntervalSince(cachedDevice.resolvedAt) < Self.deviceCacheLifetime else {
+            return nil
+        }
+        return cachedDevice.device
+    }
+
+    private func remember(_ device: AddressableSpotifyDevice) {
+        // After a successful command the device is the active one.
+        cachedDevice = (AddressableSpotifyDevice(id: device.id, isActive: true), now())
+    }
+
+    /// Plays at a track inside a context, falling back to the bare track if Spotify
+    /// rejects the offset (for example a relinked track that is not in the album).
+    private func sendPlay(_ target: PlaybackTarget, deviceID: String?) async throws {
+        do {
+            try await apiClient.play(target, deviceID: deviceID)
+        } catch let error as SpotifyAPIError {
+            guard let fallback = target.fallbackTrackTarget, error.allowsPlaybackFallback else { throw error }
+            AppLogger.shared.log("context playback failed; retrying single track error=\(error)", category: "playback")
+            try await apiClient.play(fallback, deviceID: deviceID)
+        }
+    }
+
+    /// Runs a command against the cached device, rediscovering once if Spotify no longer knows it.
+    private func withPlaybackDevice(
+        transferIfInactive: Bool = true,
+        _ command: (SpotifyAPIClient, AddressableSpotifyDevice) async throws -> Void
+    ) async throws {
+        if let device = validCachedDevice {
+            do {
+                try await command(apiClient, device)
+                return
+            } catch let error as SpotifyAPIError where error == .noDevice || error == .restrictedDevice {
+                AppLogger.shared.log("cached device rejected; rediscovering error=\(error)", category: "playback")
+                cachedDevice = nil
+            }
+        }
+
+        let device = try await resolvePlaybackDevice()
+        if transferIfInactive, !device.isActive {
+            try await apiClient.transferPlayback(deviceID: device.id)
+        }
+        try await command(apiClient, device)
+        remember(device)
     }
 
     private func resolvePlaybackDevice() async throws -> AddressableSpotifyDevice {
@@ -151,7 +221,8 @@ actor PlaybackCoordinator {
             return activeComputer
         }
 
-        if let namedComputer = addressableDevices.first(where: { $0.type == "Computer" && $0.name.localizedCaseInsensitiveContains(Host.current().localizedName ?? "") }) {
+        if !localComputerName.isEmpty,
+           let namedComputer = addressableDevices.first(where: { $0.type == "Computer" && $0.name.localizedCaseInsensitiveContains(localComputerName) }) {
             return namedComputer
         }
 
@@ -169,7 +240,20 @@ actor PlaybackCoordinator {
     }
 }
 
-struct AddressableSpotifyDevice {
+struct AddressableSpotifyDevice: Equatable {
     let id: String
     let isActive: Bool
+}
+
+private extension SpotifyAPIError {
+    /// Errors that mean "this specific request was rejected", not "playback can't work at all".
+    var allowsPlaybackFallback: Bool {
+        switch self {
+        case .notFound, .noDevice, .message, .playbackControlUnavailable, .invalidResponse:
+            return true
+        case .missingConfiguration, .unauthorized, .insufficientScope, .restrictedDevice,
+             .premiumRequired, .rateLimited:
+            return false
+        }
+    }
 }

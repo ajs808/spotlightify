@@ -2,9 +2,20 @@ import AppKit
 import Foundation
 import Sparkle
 
+/// What the menu bar shows next to the icon.
+struct MenuBarNowPlaying: Equatable {
+    let title: String
+    let artist: String
+    let isPlaying: Bool
+}
+
 @MainActor
 final class AppEnvironment: ObservableObject {
+    private static let showsNowPlayingInMenuBarKey = "menuBar.showsNowPlaying"
+
     @Published var launchAtLoginEnabled = false
+    @Published private(set) var menuBarNowPlaying: MenuBarNowPlaying?
+    @Published private(set) var showsNowPlayingInMenuBar: Bool
 
     let appearanceStore: AppearancePreferenceStore
     let configuration: AppConfiguration
@@ -14,6 +25,7 @@ final class AppEnvironment: ObservableObject {
     let playbackCoordinator: PlaybackCoordinator
     let launchAtLoginManager = LaunchAtLoginManager()
     let searchViewModel: SearchViewModel
+    let playerMonitor = SpotifyPlayerMonitor()
     var updaterController: SPUStandardUpdaterController?
 
     var canUseSparkleUpdater: Bool {
@@ -24,11 +36,14 @@ final class AppEnvironment: ObservableObject {
         playbackRequestCount > 0
     }
 
+    private let defaults: UserDefaults
     private weak var panelController: SearchPanelController?
     private weak var statusBarController: StatusBarController?
     private var playbackRequestCount = 0
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        showsNowPlayingInMenuBar = defaults.object(forKey: Self.showsNowPlayingInMenuBarKey) as? Bool ?? true
         appearanceStore = AppearancePreferenceStore()
         let configuration = AppConfiguration.load()
         let clientConfigurationStore = ClientConfigurationStore(bundledClientID: configuration.bundledSpotifyClientID)
@@ -52,16 +67,22 @@ final class AppEnvironment: ObservableObject {
         authManager.onAuthorizationSucceeded = { [weak self] in
             AppLogger.shared.log("authorization success callback", category: "auth")
             NSApp.activate(ignoringOtherApps: true)
+            self?.searchViewModel.resetLibraryAccess()
             self?.searchViewModel.prepareForPresentation()
             self?.panelController?.show()
             self?.searchViewModel.retrySearchIfNeeded()
         }
 
-        searchViewModel.onPlayRequested = { [weak self] track in
-            await self?.play(track: track)
+        searchViewModel.onPlayRequested = { [weak self] target, label in
+            await self?.play(target, label: label)
         }
-        searchViewModel.onQueueRequested = { [weak self] track in
-            await self?.queue(track: track)
+        searchViewModel.onQueueRequested = { [weak self] uris, label in
+            await self?.queue(uris, label: label)
+        }
+        searchViewModel.onNowPlayingChanged = { [weak self] summary in
+            self?.updateMenuBarNowPlaying(summary.map {
+                MenuBarNowPlaying(title: $0.title, artist: $0.artistLine, isPlaying: $0.isPlaying)
+            })
         }
         searchViewModel.onSeekRequested = { [weak self] positionMS in
             await self?.seek(to: positionMS)
@@ -85,6 +106,30 @@ final class AppEnvironment: ObservableObject {
         searchViewModel.onOpenSpotifyRequested = { [weak self] in
             self?.openSpotify()
         }
+
+        playerMonitor.onEvent = { [weak self] event in
+            self?.handlePlayerEvent(event)
+        }
+        playerMonitor.onSpotifyQuit = { [weak self] in
+            self?.updateMenuBarNowPlaying(nil)
+        }
+    }
+
+    /// Starts listening to Spotify and seeds the menu bar with what's already playing.
+    func start() {
+        playerMonitor.start()
+        guard clientConfigurationStore.hasConfiguredClientID else { return }
+        Task {
+            // Never trigger an interactive login just to fill the menu bar.
+            guard await apiClient.authorizationStateForSearch() == .ready else { return }
+            searchViewModel.refreshNowPlaying()
+        }
+    }
+
+    func setShowsNowPlayingInMenuBar(_ shows: Bool) {
+        showsNowPlayingInMenuBar = shows
+        defaults.set(shows, forKey: Self.showsNowPlayingInMenuBarKey)
+        statusBarController?.refresh()
     }
 
     func bind(panelController: SearchPanelController, statusBarController: StatusBarController) {
@@ -100,12 +145,12 @@ final class AppEnvironment: ObservableObject {
                 try? launchAtLoginManager.setEnabled(false)
             }
             launchAtLoginEnabled = false
-            statusBarController?.refreshMenu()
+            statusBarController?.refresh()
             return
         }
 
         launchAtLoginEnabled = launchAtLoginManager.currentStatus
-        statusBarController?.refreshMenu()
+        statusBarController?.refresh()
     }
 
     func togglePanel() {
@@ -135,59 +180,34 @@ final class AppEnvironment: ObservableObject {
     }
 
     func playPause() {
-        guard clientConfigurationStore.hasConfiguredClientID else {
-            openSetup()
-            searchViewModel.setInlineMessage("Add your Spotify Client ID before using transport controls.")
-            return
-        }
-        Task {
-            AppLogger.shared.log("playPause requested", category: "transport")
-            do {
-                try await playbackCoordinator.playPause()
-                AppLogger.shared.log("playPause succeeded", category: "transport")
-                searchViewModel.refreshNowPlaying()
-            } catch {
-                AppLogger.shared.log("playPause failed error=\(error.localizedDescription)", category: "transport")
-                searchViewModel.setInlineMessage(error.localizedDescription)
-                panelController?.show()
-            }
-        }
+        runTransportCommand("playPause") { try await $0.playPause() }
     }
 
     func nextTrack() {
-        guard clientConfigurationStore.hasConfiguredClientID else {
-            openSetup()
-            searchViewModel.setInlineMessage("Add your Spotify Client ID before using transport controls.")
-            return
-        }
-        Task {
-            AppLogger.shared.log("nextTrack requested", category: "transport")
-            do {
-                try await playbackCoordinator.nextTrack()
-                AppLogger.shared.log("nextTrack succeeded", category: "transport")
-                searchViewModel.refreshNowPlaying()
-            } catch {
-                AppLogger.shared.log("nextTrack failed error=\(error.localizedDescription)", category: "transport")
-                searchViewModel.setInlineMessage(error.localizedDescription)
-                panelController?.show()
-            }
-        }
+        runTransportCommand("nextTrack") { try await $0.nextTrack() }
     }
 
     func previousTrack() {
+        runTransportCommand("previousTrack") { try await $0.previousTrack() }
+    }
+
+    private func runTransportCommand(
+        _ name: String,
+        _ command: @escaping @Sendable (PlaybackCoordinator) async throws -> Void
+    ) {
         guard clientConfigurationStore.hasConfiguredClientID else {
             openSetup()
             searchViewModel.setInlineMessage("Add your Spotify Client ID before using transport controls.")
             return
         }
         Task {
-            AppLogger.shared.log("previousTrack requested", category: "transport")
+            AppLogger.shared.log("\(name) requested", category: "transport")
             do {
-                try await playbackCoordinator.previousTrack()
-                AppLogger.shared.log("previousTrack succeeded", category: "transport")
+                try await command(playbackCoordinator)
+                AppLogger.shared.log("\(name) succeeded", category: "transport")
                 searchViewModel.refreshNowPlaying()
             } catch {
-                AppLogger.shared.log("previousTrack failed error=\(error.localizedDescription)", category: "transport")
+                AppLogger.shared.log("\(name) failed error=\(error.localizedDescription)", category: "transport")
                 searchViewModel.setInlineMessage(error.localizedDescription)
                 panelController?.show()
             }
@@ -208,7 +228,8 @@ final class AppEnvironment: ObservableObject {
             do {
                 _ = try await authManager.ensureAuthorized(forceReauthentication: true)
                 AppLogger.shared.log("loginReconnect succeeded", category: "auth")
-                searchViewModel.setInlineMessage("Spotify connected.")
+                searchViewModel.resetLibraryAccess()
+                searchViewModel.setInlineMessage("Spotify connected.", isError: false)
                 searchViewModel.prepareForPresentation()
                 panelController?.show()
             } catch {
@@ -249,7 +270,7 @@ final class AppEnvironment: ObservableObject {
         do {
             try launchAtLoginManager.setEnabled(!launchAtLoginEnabled)
             launchAtLoginEnabled = launchAtLoginManager.currentStatus
-            statusBarController?.refreshMenu()
+            statusBarController?.refresh()
         } catch {
             searchViewModel.setInlineMessage(error.localizedDescription)
         }
@@ -258,14 +279,16 @@ final class AppEnvironment: ObservableObject {
     func setAppearance(_ preference: AppearancePreference) {
         appearanceStore.setPreference(preference)
         panelController?.applyAppearance(preference)
-        statusBarController?.refreshMenu()
+        statusBarController?.refresh()
         AppLogger.shared.log("appearance changed to \(preference.rawValue)", category: "appearance")
     }
 
     func signOut() {
         do {
             try authManager.clearStoredAuthorization()
+            Task { await playbackCoordinator.forgetCachedDevice() }
             searchViewModel.clearNowPlaying()
+            searchViewModel.resetLibraryAccess()
             searchViewModel.setInlineMessage("Spotify login cleared.", isError: false)
             searchViewModel.prepareForPresentation()
         } catch {
@@ -273,9 +296,9 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    private func play(track: SpotifyTrack) async {
+    private func play(_ target: PlaybackTarget, label: String) async {
         guard !isPlaybackRequestInProgress else {
-            AppLogger.shared.log("play ignored because another playback request is in progress track=\(track.id)", category: "playback")
+            AppLogger.shared.log("play ignored because another playback request is in progress", category: "playback")
             return
         }
 
@@ -283,43 +306,39 @@ final class AppEnvironment: ObservableObject {
         defer { playbackRequestCount -= 1 }
 
         do {
-            AppLogger.shared.log("play requested track=\(track.id)", category: "playback")
+            AppLogger.shared.log("play requested target=\(target)", category: "playback")
             _ = try await authManager.ensureAuthorized()
-            try await performWithAutoLaunch { try await playbackCoordinator.play(track: track) }
-            AppLogger.shared.log("play succeeded track=\(track.id)", category: "playback")
-            searchViewModel.setInlineMessage("Playing \(track.name)", isError: false)
+            try await performWithAutoLaunch { try await playbackCoordinator.play(target) }
+            AppLogger.shared.log("play succeeded", category: "playback")
+            searchViewModel.setInlineMessage("Playing \(label)", isError: false)
             searchViewModel.refreshNowPlaying()
             searchViewModel.refreshQueueAfterPlaybackChange()
             searchViewModel.clearQuery()
             closePanel()
         } catch {
-            AppLogger.shared.log("play failed track=\(track.id) error=\(error.localizedDescription)", category: "playback")
+            AppLogger.shared.log("play failed error=\(error.localizedDescription)", category: "playback")
             searchViewModel.setInlineMessage(error.localizedDescription)
             panelController?.show()
             focusSearchField()
         }
     }
 
-    private func queue(track: SpotifyTrack) async {
+    private func queue(_ uris: [String], label: String) async {
         playbackRequestCount += 1
         defer { playbackRequestCount -= 1 }
 
         do {
-            AppLogger.shared.log("queue requested track=\(track.id)", category: "playback")
+            AppLogger.shared.log("queue requested count=\(uris.count)", category: "playback")
             _ = try await authManager.ensureAuthorized()
-            try await performWithAutoLaunch { try await playbackCoordinator.queue(track: track) }
-            AppLogger.shared.log("queue succeeded track=\(track.id)", category: "playback")
-            searchViewModel.setInlineMessage("Queued \(track.name)", isError: false)
+            try await performWithAutoLaunch { try await playbackCoordinator.queue(trackURIs: uris) }
+            AppLogger.shared.log("queue succeeded count=\(uris.count)", category: "playback")
+            let suffix = uris.count > 1 ? " (\(uris.count) tracks)" : ""
+            searchViewModel.showTransientMessage("Queued \(label)\(suffix)")
             searchViewModel.refreshNowPlaying()
             searchViewModel.refreshQueueAfterPlaybackChange()
             searchViewModel.clearQuery()
-            // Auto-clear the message after 1.5 seconds
-            Task {
-                try? await Task.sleep(for: .seconds(1))
-                searchViewModel.clearMessage()
-            }
         } catch {
-            AppLogger.shared.log("queue failed track=\(track.id) error=\(error.localizedDescription)", category: "playback")
+            AppLogger.shared.log("queue failed count=\(uris.count) error=\(error.localizedDescription)", category: "playback")
             searchViewModel.setInlineMessage(error.localizedDescription)
             panelController?.show()
             focusSearchField()
@@ -376,6 +395,28 @@ final class AppEnvironment: ObservableObject {
         } catch {
             searchViewModel.setInlineMessage(error.localizedDescription)
         }
+    }
+
+    private func handlePlayerEvent(_ event: SpotifyPlayerEvent) {
+        switch event.state {
+        case .stopped:
+            updateMenuBarNowPlaying(nil)
+        case .playing, .paused:
+            if let title = event.title, !title.isEmpty {
+                updateMenuBarNowPlaying(MenuBarNowPlaying(
+                    title: title,
+                    artist: event.artist ?? "",
+                    isPlaying: event.state == .playing
+                ))
+            }
+        }
+        searchViewModel.applyPlayerEvent(event)
+    }
+
+    private func updateMenuBarNowPlaying(_ nowPlaying: MenuBarNowPlaying?) {
+        guard menuBarNowPlaying != nowPlaying else { return }
+        menuBarNowPlaying = nowPlaying
+        statusBarController?.refresh()
     }
 
     private func performWithAutoLaunch(_ operation: () async throws -> Void) async throws {

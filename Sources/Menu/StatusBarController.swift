@@ -3,7 +3,9 @@ import AppKit
 @MainActor
 final class StatusBarController: NSObject {
     private let environment: AppEnvironment
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    nonisolated static let maxTitleLength = 32
+
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -37,11 +39,61 @@ final class StatusBarController: NSObject {
         }
 
         button.toolTip = "Spotlightify"
+        refresh()
+    }
+
+    func refresh() {
+        refreshButtonTitle()
         refreshMenu()
     }
 
-    func refreshMenu() {
+    /// "Song — Artist", shortened to keep the menu bar tidy; nil when nothing should show.
+    nonisolated static func menuBarTitle(for nowPlaying: MenuBarNowPlaying?, maxLength: Int = maxTitleLength) -> String? {
+        guard let nowPlaying, nowPlaying.isPlaying, !nowPlaying.title.isEmpty else { return nil }
+        let full = nowPlaying.artist.isEmpty ? nowPlaying.title : "\(nowPlaying.title) — \(nowPlaying.artist)"
+        guard full.count > maxLength else { return full }
+        return String(full.prefix(maxLength - 1)).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    private func refreshButtonTitle() {
+        guard let button = statusItem.button, button.image != nil else { return }
+
+        let title = environment.showsNowPlayingInMenuBar
+            ? Self.menuBarTitle(for: environment.menuBarNowPlaying)
+            : nil
+        if let title {
+            button.title = " " + title
+            button.imagePosition = .imageLeading
+            button.font = NSFont.menuBarFont(ofSize: 0)
+        } else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+        }
+        button.toolTip = environment.menuBarNowPlaying.map { "\($0.title) — \($0.artist)" } ?? "Spotlightify"
+    }
+
+    private func refreshMenu() {
         let menu = NSMenu()
+        if let nowPlaying = environment.menuBarNowPlaying {
+            let header = NSMenuItem(title: nowPlaying.title, action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            let detail = [nowPlaying.artist, nowPlaying.isPlaying ? "" : "Paused"]
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+            if !detail.isEmpty {
+                if #available(macOS 14.4, *) {
+                    header.subtitle = detail
+                } else {
+                    header.title = "\(nowPlaying.title) — \(detail)"
+                }
+            }
+            header.image = NSImage(
+                systemSymbolName: nowPlaying.isPlaying ? "play.fill" : "pause.fill",
+                accessibilityDescription: nowPlaying.isPlaying ? "Playing" : "Paused"
+            )
+            menu.addItem(header)
+            menu.addItem(.separator())
+        }
         menu.addItem(makeItem(title: "Open Search", action: #selector(openSearch)))
         menu.addItem(makeItem(title: "Spotify Setup", action: #selector(openSetup)))
         menu.addItem(makeItem(title: "Login / Reconnect", action: #selector(loginReconnect)))
@@ -52,6 +104,11 @@ final class StatusBarController: NSObject {
             title: "Launch at Login",
             action: #selector(toggleLaunchAtLogin),
             state: environment.launchAtLoginEnabled ? .on : .off
+        ))
+        menu.addItem(makeItem(
+            title: "Show Song in Menu Bar",
+            action: #selector(toggleShowsNowPlaying),
+            state: environment.showsNowPlayingInMenuBar ? .on : .off
         ))
         menu.addItem(makeAppearanceItem())
         if environment.canUseSparkleUpdater {
@@ -125,6 +182,10 @@ final class StatusBarController: NSObject {
 
     @objc private func toggleLaunchAtLogin() {
         environment.toggleLaunchAtLogin()
+    }
+
+    @objc private func toggleShowsNowPlaying() {
+        environment.setShowsNowPlayingInMenuBar(!environment.showsNowPlayingInMenuBar)
     }
 
     @objc private func useSystemAppearance() {

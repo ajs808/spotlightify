@@ -13,6 +13,9 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     private var localEventMonitor: Any?
     private var previousFrontmostApplication: NSRunningApplication?
     private var shouldRestorePreviousApplication = false
+    private let defaults = UserDefaults.standard
+    private let positionDefaultsKey = "panel.position"
+    private var isPositioningWindow = false
 
     var isVisible: Bool {
         window?.isVisible == true
@@ -35,7 +38,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         panel.isFloatingPanel = true
         panel.level = .statusBar
         panel.collectionBehavior = [.moveToActiveSpace, .transient]
-        panel.isMovableByWindowBackground = false
+        panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .utilityWindow
         panel.backgroundColor = .clear
@@ -106,6 +109,12 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     func applyAppearance(_ preference: AppearancePreference) {
         window?.appearance = preference.appKitAppearance
         window?.contentView?.needsDisplay = true
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard !isPositioningWindow, let window, window.isVisible, let screen = window.screen else { return }
+        guard let position = Self.relativePosition(of: window.frame, in: screen.visibleFrame) else { return }
+        defaults.set([Double(position.x), Double(position.y)], forKey: positionDefaultsKey)
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -222,11 +231,33 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         guard let screen = NSScreen.main else { return }
 
         let screenFrame = screen.visibleFrame
-        let originX = screenFrame.midX - window.frame.width / 2
-        // Keep the visible card's top edge 80pt below the screen top.
-        let originY = screenFrame.maxY - window.frame.height - (80 - SearchPanelLayout.windowInset)
+        var origin = NSPoint(
+            x: screenFrame.midX - window.frame.width / 2,
+            // Keep the visible card's top edge 80pt below the screen top.
+            y: screenFrame.maxY - window.frame.height - (80 - SearchPanelLayout.windowInset)
+        )
+        if let saved = defaults.array(forKey: positionDefaultsKey) as? [Double], saved.count == 2 {
+            origin = NSPoint(
+                x: screenFrame.minX + saved[0] * max(0, screenFrame.width - window.frame.width),
+                y: screenFrame.minY + saved[1] * max(0, screenFrame.height - window.frame.height)
+            )
+        }
 
-        window.setFrameOrigin(NSPoint(x: originX, y: originY))
+        isPositioningWindow = true
+        window.setFrameOrigin(origin)
+        isPositioningWindow = false
+    }
+
+    /// Where the window sits within the room it has to move on screen, from 0 to 1 on each axis,
+    /// so a dragged position carries over to screens of other sizes.
+    private static func relativePosition(of frame: NSRect, in screenFrame: NSRect) -> NSPoint? {
+        let travelX = screenFrame.width - frame.width
+        let travelY = screenFrame.height - frame.height
+        guard travelX > 0, travelY > 0 else { return nil }
+        return NSPoint(
+            x: min(max((frame.minX - screenFrame.minX) / travelX, 0), 1),
+            y: min(max((frame.minY - screenFrame.minY) / travelY, 0), 1)
+        )
     }
 
     private func captureFrontmostApplicationForRestoration() {

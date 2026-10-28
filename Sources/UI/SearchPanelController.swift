@@ -228,7 +228,10 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     }
 
     private func position(window: NSWindow) {
-        guard let screen = NSScreen.main else { return }
+        // Like Spotlight, open on the screen with the pointer rather than the one with focus.
+        let mouseLocation = NSEvent.mouseLocation
+        let mouseScreen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+        guard let screen = mouseScreen ?? NSScreen.main else { return }
 
         let screenFrame = screen.visibleFrame
         var origin = NSPoint(

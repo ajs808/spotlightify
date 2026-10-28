@@ -38,7 +38,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         panel.isFloatingPanel = true
         panel.level = .statusBar
         panel.collectionBehavior = [.moveToActiveSpace, .transient]
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .utilityWindow
         panel.backgroundColor = .clear

@@ -105,5 +105,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.environment.previousTrack()
             }
         }
+
+        hotKeyManager.registerShortcut(
+            HotKeyShortcut(
+                id: .seekBackward,
+                key: UInt32(kVK_ANSI_B),
+                modifiers: [.control, .option, .shift]
+            )
+        ) { [weak self] in
+            Task { @MainActor in
+                self?.environment.seek(by: -15)
+            }
+        }
+
+        hotKeyManager.registerShortcut(
+            HotKeyShortcut(
+                id: .seekForward,
+                key: UInt32(kVK_ANSI_N),
+                modifiers: [.control, .option, .shift]
+            )
+        ) { [weak self] in
+            Task { @MainActor in
+                self?.environment.seek(by: 15)
+            }
+        }
     }
 }

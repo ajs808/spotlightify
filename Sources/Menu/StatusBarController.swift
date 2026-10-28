@@ -110,6 +110,13 @@ final class StatusBarController: NSObject {
             action: #selector(toggleShowsNowPlaying),
             state: environment.showsNowPlayingInMenuBar ? .on : .off
         ))
+        let localControlsItem = makeItem(
+            title: "Use Local Spotify Controls",
+            action: #selector(toggleUsesLocalControls),
+            state: environment.usesLocalControls ? .on : .off
+        )
+        localControlsItem.toolTip = "Faster, but only controls Spotify on this Mac. Turn off to control phones and speakers."
+        menu.addItem(localControlsItem)
         menu.addItem(makeAppearanceItem())
         if environment.canUseSparkleUpdater {
             menu.addItem(.separator())
@@ -182,6 +189,10 @@ final class StatusBarController: NSObject {
 
     @objc private func toggleLaunchAtLogin() {
         environment.toggleLaunchAtLogin()
+    }
+
+    @objc private func toggleUsesLocalControls() {
+        environment.setUsesLocalControls(!environment.usesLocalControls)
     }
 
     @objc private func toggleShowsNowPlaying() {

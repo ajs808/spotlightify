@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Spotlightify controls the Spotify app directly for instant seeking.</string>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/anudeep-gad12/spotlightify/gh-pages/appcast.xml</string>
 	<key>SUPublicEDKey</key>

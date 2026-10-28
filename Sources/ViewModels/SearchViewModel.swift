@@ -91,6 +91,8 @@ final class SearchViewModel: ObservableObject {
     var onPlayRequested: ((PlaybackTarget, String) async -> Void)?
     var onQueueRequested: (([String], String) async -> Void)?
     var onSeekRequested: ((Int) async -> Void)?
+    /// Reads the local Spotify app, which is instant and never trails a change like the Web API.
+    var localNowPlaying: (() -> NowPlayingSummary?)?
     var onLoginRequested: (() -> Void)?
     var onSaveClientIDRequested: ((String) -> Void)?
     var onClearConfigurationRequested: (() -> Void)?
@@ -511,9 +513,28 @@ final class SearchViewModel: ObservableObject {
         onOpenSpotifyRequested?()
     }
 
+    /// Seeks relative to the current position through the Web API, staying within the track.
+    func requestSeek(by offsetMS: Int) {
+        guard case .showing(let summary) = nowPlayingState, let current = summary.progressMs(at: Date()) else {
+            AppLogger.shared.log("seek by offset ignored; no known position", category: "transport")
+            return
+        }
+        var target = current + offsetMS
+        if let durationMs = summary.durationMs {
+            target = min(target, max(0, durationMs - 1_000))
+        }
+        requestSeek(to: target)
+    }
+
+    /// Moves the bar to a position the local Spotify app already seeked to.
+    func applyPlaybackPosition(_ positionMS: Int) {
+        guard case .showing(let summary) = nowPlayingState else { return }
+        nowPlayingState = .showing(summary.with(progressMs: positionMS, sampledAt: Date()))
+    }
+
     func requestSeek(to positionMS: Int) {
         let position = max(0, positionMS)
-        // Move the bar immediately; the refresh after the seek confirms it.
+        // Move the bar now; the API trails the seek, so reading it back would snap the bar back.
         if case .showing(let summary) = nowPlayingState {
             nowPlayingState = .showing(summary.with(progressMs: position, sampledAt: Date()))
         }
@@ -572,6 +593,15 @@ final class SearchViewModel: ObservableObject {
         guard canShowNowPlaying else {
             nowPlayingState = .hidden
             nowPlayingRefreshInProgress = false
+            return
+        }
+
+        if let summary = localNowPlaying?() {
+            nowPlayingState = .showing(summary)
+            nowPlayingRefreshInProgress = false
+            if isPresented {
+                checkLikedState(for: summary.trackURI)
+            }
             return
         }
 

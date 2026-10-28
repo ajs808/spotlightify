@@ -8,6 +8,8 @@ struct HotKeyShortcut {
         case playPause = 2
         case nextTrack = 3
         case previousTrack = 4
+        case seekBackward = 5
+        case seekForward = 6
     }
 
     let id: Identifier

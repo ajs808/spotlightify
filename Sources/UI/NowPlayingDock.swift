@@ -177,7 +177,10 @@ private struct SeekBar: View {
                             .shadow(color: Color.panelShadow.opacity(0.42), radius: 4, y: 2)
                             .offset(x: thumbOffset)
                     }
-
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
+                // An overlay, so the taller tooltip can't grow the track and shift the bar down.
+                .overlay(alignment: .leading) {
                     if isDragging {
                         Text(PlaybackTime.format(displayedPositionMs))
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -190,10 +193,9 @@ private struct SeekBar: View {
                             )
                             .shadow(color: Color.panelShadow.opacity(0.55), radius: 7, y: 3)
                             .offset(x: tooltipOffset, y: -28)
-                            .zIndex(1)
+                            .allowsHitTesting(false)
                     }
                 }
-                .frame(maxHeight: .infinity, alignment: .center)
                 .contentShape(Rectangle())
                 .onHover { hovering in
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {

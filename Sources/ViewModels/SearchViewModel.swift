@@ -595,7 +595,7 @@ final class SearchViewModel: ObservableObject {
             do {
                 var playbackState = try await apiClient.currentPlaybackState()
                 var summary = Self.makeNowPlayingSummary(from: playbackState, sampledAt: Date())
-                // Right after a track change the API may still report the previous track; give it a moment.
+                // The API can still report the previous track right after a change.
                 var retriesLeft = 3
                 while let expected = latestBroadcastTrackURI, let current = summary,
                       current.trackURI != expected, retriesLeft > 0 {
@@ -612,7 +612,6 @@ final class SearchViewModel: ObservableObject {
                 if let expected = latestBroadcastTrackURI, summary.trackURI != expected {
                     // Playback may have moved to another device, so trust the API from now on.
                     latestBroadcastTrackURI = nil
-                    // Keep what the broadcast already showed for this round.
                     if case .showing = nowPlayingState { return }
                 }
                 nowPlayingState = .showing(summary)

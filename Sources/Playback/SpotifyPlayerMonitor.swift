@@ -58,8 +58,7 @@ final class SpotifyPlayerMonitor: NSObject {
     func start() {
         guard observers.isEmpty else { return }
 
-        // AppKit suspends distributed notifications while the app is inactive, which is most of
-        // the time for a menu bar app. Deliver immediately so media-key changes aren't held back.
+        // AppKit holds distributed notifications while the app is inactive, i.e. whenever the panel is closed.
         DistributedNotificationCenter.default().addObserver(
             self,
             selector: #selector(playbackStateDidChange(_:)),

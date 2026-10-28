@@ -37,6 +37,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         panel.collectionBehavior = [.moveToActiveSpace, .transient]
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
+        panel.animationBehavior = .utilityWindow
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.appearance = environment.appearanceStore.preference.appKitAppearance

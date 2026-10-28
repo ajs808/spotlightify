@@ -108,6 +108,8 @@ final class SearchViewModel: ObservableObject {
     private var detailTask: Task<Void, Never>?
     private var nowPlayingTask: Task<Void, Never>?
     private var nowPlayingRefreshID = UUID()
+    /// The track the local Spotify app last broadcast, which the Web API can trail by a second or two.
+    private var latestBroadcastTrackURI: String?
     private var trackEndRefreshTask: Task<Void, Never>?
     private var recentTask: Task<Void, Never>?
     private var queueTask: Task<Void, Never>?
@@ -591,11 +593,27 @@ final class SearchViewModel: ObservableObject {
             }
 
             do {
-                let playbackState = try await apiClient.currentPlaybackState()
+                var playbackState = try await apiClient.currentPlaybackState()
+                var summary = Self.makeNowPlayingSummary(from: playbackState, sampledAt: Date())
+                // Right after a track change the API may still report the previous track; give it a moment.
+                var retriesLeft = 3
+                while let expected = latestBroadcastTrackURI, let current = summary,
+                      current.trackURI != expected, retriesLeft > 0 {
+                    retriesLeft -= 1
+                    try await Task.sleep(for: .milliseconds(700))
+                    playbackState = try await apiClient.currentPlaybackState()
+                    summary = Self.makeNowPlayingSummary(from: playbackState, sampledAt: Date())
+                }
                 guard !Task.isCancelled else { return }
-                guard let summary = Self.makeNowPlayingSummary(from: playbackState, sampledAt: Date()) else {
+                guard let summary else {
                     nowPlayingState = .hidden
                     return
+                }
+                if let expected = latestBroadcastTrackURI, summary.trackURI != expected {
+                    // Playback may have moved to another device, so trust the API from now on.
+                    latestBroadcastTrackURI = nil
+                    // Keep what the broadcast already showed for this round.
+                    if case .showing = nowPlayingState { return }
                 }
                 nowPlayingState = .showing(summary)
                 // The heart is only visible in the panel, so don't spend a request on it otherwise.
@@ -618,6 +636,7 @@ final class SearchViewModel: ObservableObject {
     func applyPlayerEvent(_ event: SpotifyPlayerEvent) {
         guard canShowNowPlaying else { return }
         let now = Date()
+        latestBroadcastTrackURI = event.state == .stopped ? nil : event.trackURI
 
         if event.state != .stopped,
            case .showing(let summary) = nowPlayingState,
@@ -630,22 +649,31 @@ final class SearchViewModel: ObservableObject {
                 sampledAt: now
             ))
         } else if isPresented {
+            // Show the new track right away; the API read fills in artwork and device.
+            if let summary = Self.makeNowPlayingSummary(from: event, sampledAt: now) {
+                nowPlayingState = .showing(summary)
+            }
             refreshNowPlaying()
         } else if event.state == .stopped {
             nowPlayingState = .hidden
-        } else if let title = event.title {
-            nowPlayingState = .showing(NowPlayingSummary(
-                trackURI: event.trackURI,
-                title: title,
-                artistLine: event.artist ?? "",
-                artworkURL: nil,
-                isPlaying: event.state == .playing,
-                deviceName: nil,
-                progressMs: event.positionMs,
-                durationMs: event.durationMs,
-                sampledAt: now
-            ))
+        } else if let summary = Self.makeNowPlayingSummary(from: event, sampledAt: now) {
+            nowPlayingState = .showing(summary)
         }
+    }
+
+    private static func makeNowPlayingSummary(from event: SpotifyPlayerEvent, sampledAt: Date) -> NowPlayingSummary? {
+        guard event.state != .stopped, let title = event.title else { return nil }
+        return NowPlayingSummary(
+            trackURI: event.trackURI,
+            title: title,
+            artistLine: event.artist ?? "",
+            artworkURL: nil,
+            isPlaying: event.state == .playing,
+            deviceName: nil,
+            progressMs: event.positionMs,
+            durationMs: event.durationMs,
+            sampledAt: sampledAt
+        )
     }
 
     func refreshQueueAfterPlaybackChange() {

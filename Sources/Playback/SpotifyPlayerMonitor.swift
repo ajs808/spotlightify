@@ -45,7 +45,7 @@ struct SpotifyPlayerEvent: Equatable {
 /// Listens for the Spotify desktop app's own playback broadcasts, so track and
 /// play/pause changes show up instantly without polling the Web API.
 @MainActor
-final class SpotifyPlayerMonitor {
+final class SpotifyPlayerMonitor: NSObject {
     private nonisolated static let spotifyBundleIdentifier = "com.spotify.client"
     private nonisolated static let playbackStateChanged = Notification.Name("com.spotify.client.PlaybackStateChanged")
 
@@ -53,22 +53,21 @@ final class SpotifyPlayerMonitor {
     var onSpotifyQuit: (() -> Void)?
 
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var isObservingPlayback = false
 
     func start() {
         guard observers.isEmpty else { return }
 
-        let distributedCenter = DistributedNotificationCenter.default()
-        let playbackObserver = distributedCenter.addObserver(
-            forName: Self.playbackStateChanged,
+        // AppKit suspends distributed notifications while the app is inactive, which is most of
+        // the time for a menu bar app. Deliver immediately so media-key changes aren't held back.
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(playbackStateDidChange(_:)),
+            name: Self.playbackStateChanged,
             object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let event = SpotifyPlayerEvent(userInfo: notification.userInfo) else { return }
-            MainActor.assumeIsolated {
-                self?.onEvent?(event)
-            }
-        }
-        observers.append((distributedCenter, playbackObserver))
+            suspensionBehavior: .deliverImmediately
+        )
+        isObservingPlayback = true
 
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         let terminationObserver = workspaceCenter.addObserver(
@@ -85,7 +84,16 @@ final class SpotifyPlayerMonitor {
         observers.append((workspaceCenter, terminationObserver))
     }
 
+    @objc private func playbackStateDidChange(_ notification: Notification) {
+        guard let event = SpotifyPlayerEvent(userInfo: notification.userInfo) else { return }
+        onEvent?(event)
+    }
+
     func stop() {
+        if isObservingPlayback {
+            DistributedNotificationCenter.default().removeObserver(self, name: Self.playbackStateChanged, object: nil)
+            isObservingPlayback = false
+        }
         for (center, observer) in observers {
             center.removeObserver(observer)
         }

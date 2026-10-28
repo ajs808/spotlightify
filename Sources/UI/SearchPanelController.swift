@@ -260,7 +260,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                 return
             }
 
-            let restored = appToRestore.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            let restored = appToRestore.activate(options: [.activateIgnoringOtherApps])
             AppLogger.shared.log("restored previous app bundle=\(appToRestore.bundleIdentifier ?? "unknown") success=\(restored)", category: "panel")
         }
     }

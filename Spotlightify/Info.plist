@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Spotlightify listens to Spotify's audio to draw the visualizer. Nothing is recorded or saved.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Spotlightify controls the Spotify app directly for instant seeking.</string>
 	<key>SUFeedURL</key>

@@ -93,6 +93,7 @@ final class SearchViewModel: ObservableObject {
     var onSeekRequested: ((Int) async -> Void)?
     /// Reads the local Spotify app, which is instant and never trails a change like the Web API.
     var localNowPlaying: (() -> NowPlayingSummary?)?
+    let spectrum = AudioSpectrumMonitor()
     var onLoginRequested: (() -> Void)?
     var onSaveClientIDRequested: ((String) -> Void)?
     var onClearConfigurationRequested: (() -> Void)?
@@ -195,6 +196,7 @@ final class SearchViewModel: ObservableObject {
 
     func setPresented(_ presented: Bool) {
         isPresented = presented
+        presented ? spectrum.start() : spectrum.stop()
     }
 
     func prepareForPresentation() {

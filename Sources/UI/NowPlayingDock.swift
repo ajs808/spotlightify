@@ -4,6 +4,7 @@ struct NowPlayingDock: View {
     let state: NowPlayingState
     let isRefreshing: Bool
     let isLiked: Bool
+    let spectrum: AudioSpectrumMonitor
     let onSeek: @MainActor (Int) -> Void
     let onToggleLike: @MainActor () -> Void
 
@@ -42,9 +43,7 @@ struct NowPlayingDock: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color.inkFaint)
 
-                    Circle()
-                        .fill(isPlaying ? Color.playingDot : Color.orange.opacity(0.85))
-                        .frame(width: 6, height: 6)
+                    PlaybackVisualizer(isPlaying: isPlaying, spectrum: spectrum)
 
                     Text(isPlaying ? "playing" : "paused")
                         .font(.system(size: 11, weight: .medium))
@@ -116,6 +115,41 @@ struct NowPlayingDock: View {
         .buttonStyle(.plain)
         .help(isLiked ? "Remove from Liked Songs (⌘L)" : "Add to Liked Songs (⌘L)")
         .accessibilityLabel(isLiked ? "Remove from Liked Songs" : "Add to Liked Songs")
+    }
+}
+
+/// Bars that follow Spotify's audio, or the animated waveform symbol when there's no live audio
+/// (paused, playing on another device, no capture permission, or Reduce Motion).
+private struct PlaybackVisualizer: View {
+    let isPlaying: Bool
+    let spectrum: AudioSpectrumMonitor
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let barWidth: CGFloat = 2
+    private static let barSpacing: CGFloat = 1.5
+    private static let height: CGFloat = 12
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !isPlaying || reduceMotion)) { _ in
+            if isPlaying, !reduceMotion, let levels = spectrum.levels() {
+                HStack(alignment: .center, spacing: Self.barSpacing) {
+                    ForEach(levels.indices, id: \.self) { index in
+                        Capsule(style: .continuous)
+                            .frame(width: Self.barWidth, height: max(Self.barWidth, Self.height * CGFloat(levels[index])))
+                    }
+                }
+                .foregroundStyle(Color.playingDot)
+                .frame(height: Self.height)
+            } else {
+                Image(systemName: "waveform")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isPlaying ? Color.playingDot : Color.orange.opacity(0.85))
+                    .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, isActive: isPlaying && !reduceMotion)
+                    .frame(height: Self.height)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 

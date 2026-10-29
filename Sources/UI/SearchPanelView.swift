@@ -33,6 +33,7 @@ struct SearchPanelView: View {
                     state: viewModel.nowPlayingState,
                     isRefreshing: viewModel.nowPlayingRefreshInProgress,
                     isLiked: viewModel.isLiked(nowPlayingTrackURI),
+                    spectrum: viewModel.spectrum,
                     onSeek: viewModel.requestSeek(to:),
                     onToggleLike: toggleLikeNowPlaying
                 )
